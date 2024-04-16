@@ -1,0 +1,7 @@
+# Ignore env files
+*.venv
+
+# Ignore uploaded_files directory
+uploaded_files/
+instance/
+__pycache__/
