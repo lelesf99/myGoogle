@@ -164,7 +164,7 @@
       const filePathList = [];
 
       window.onload = () => {
-        fetch("http://127.0.0.1:5000/list")
+        fetch("http://192.168.0.5:5000/list")
           .then((response) => response.json())
           .then((data) => {
             filePathList.push(...data);
@@ -178,7 +178,7 @@
           fileElement.innerHTML = `<h5>File: ${file.fileName}</h5>
           <div class="d-flex">
             <button onclick="deleteFile(${index})"><span class="material-symbols-outlined">delete</span></button> 
-            <a class="btn-link" href="http://127.0.0.1:5000/${file.filePath}" target="_blank"><span class="material-symbols-outlined">download</span></a>
+            <a class="btn-link" href="http://192.168.0.5:5000/${file.filePath}" target="_blank"><span class="material-symbols-outlined">download</span></a>
           </div>
           `;
           fileListElement.appendChild(fileElement);
@@ -195,7 +195,7 @@
             return;
           }
           input.setAttribute("disabled", true);
-          fetch(`http://127.0.0.1:5000/search?query=${searchValue}`)
+          fetch(`http://192.168.0.5:5000/search?query=${searchValue}`)
             .then((response) => response.json())
             .then((data) => {
               if (data.length === 0) {
@@ -213,7 +213,7 @@
                 const resultElement = document.createElement("li");
                 resultElement.innerHTML = `<h5>${result.fileName}</h5>
                 <p>Encontrado ${result.occurences.length} vezes</p>
-                <a class="btn-link" href="http://127.0.0.1:5000/${result.filePath}" target="_blank"><span class="material-symbols-outlined">download</span></a>`;
+                <a class="btn-link" href="http://192.168.0.5:5000/${result.filePath}" target="_blank"><span class="material-symbols-outlined">download</span></a>`;
                 const occurences = document.createElement("ol");
                 occurences.classList.add("occurences");
                 result.occurences.forEach((occurence, index, array) => {
@@ -366,7 +366,7 @@
         formData.append("chunkNumber", chunkNumber);
         formData.append("totalChunks", totalChunks);
 
-        return fetch("http://127.0.0.1:5000/upload_chunk", {
+        return fetch("http://192.168.0.5:5000/upload_chunk", {
           method: "POST",
           body: formData,
         })
@@ -376,7 +376,7 @@
 
       function deleteFile(index) {
         const file = filePathList[index];
-        fetch(`http://127.0.0.1:5000/delete?fileName=${file.fileName}`, {
+        fetch(`http://192.168.0.5:5000/delete?fileName=${file.fileName}`, {
           method: "DELETE",
         })
           .then((response) => response.json())
