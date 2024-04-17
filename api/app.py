@@ -1,6 +1,5 @@
 import mmap
-from flask import Flask, request, redirect, url_for, jsonify, render_template, send_from_directory
-from werkzeug.utils import secure_filename
+from flask import Flask, request, jsonify, send_from_directory
 import os
 import threading
 from models import db, Document
@@ -133,4 +132,4 @@ def add_file_db(file_name, file_path):
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000)
