@@ -1,9 +1,12 @@
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 use regex::bytes;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
+use core::time;
 use std::io::{self, stdout, BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::ops::Add;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,7 +15,7 @@ use std::{fs::File, string};
 
 // constants
 
-const SERVER_ADDR: &str = "127.0.0.1:5000";
+const SERVER_ADDR: &str = "192.168.0.5:5000";
 const BUFFER_SIZE: usize = 16 * 1024;
 const DELIMITER: u8 = 0x0A;
 const ACK: &[u8] = b"OK";
@@ -381,24 +384,35 @@ fn wait_for_ack(stream: &mut TcpStream) -> io::Result<()> {
 }
 
 
-// tests
-
 async fn test(n_requests: usize, full_duration: u64, search_term: String) {
     let server_addr = Arc::new(SERVER_ADDR.to_string());
     let search_term = Arc::new(search_term);
     let interval = Duration::from_secs(full_duration) / n_requests as u32;
 
+    // Shared state across tasks for accumulating time
+    let time_acc = Arc::new(Mutex::new(Duration::from_secs(0)));
+
     let mut handles = Vec::new();
 
-    for _ in 0..n_requests {
+    for index in 0..n_requests {
         let server_addr = server_addr.clone();
         let search_term = search_term.clone();
+        let time_acc = time_acc.clone();
 
+        // Sleep before spawning the request task.
+        tokio::time::sleep(interval).await;
+        println!("sent n{index} request");
         let handle = tokio::spawn(async move {
-            if let Err(e) = send_search_request(&server_addr, &search_term).await {
-                eprintln!("Failed to send search request: {:?}", e);
+            match send_search_request(&server_addr, &search_term, index as u32).await {
+                Ok(time) => {
+                    println!("Request {} completed in {:.2?}", index, time);
+                    let mut time_acc_lock = time_acc.lock().await;
+                    *time_acc_lock = *time_acc_lock + time;
+                },
+                Err(e) => {
+                    eprintln!("Failed to send request: {:?}", e);
+                }
             }
-            sleep(interval).await;
         });
 
         handles.push(handle);
@@ -410,14 +424,31 @@ async fn test(n_requests: usize, full_duration: u64, search_term: String) {
         }
     }
 
-    println!("Sent {} requests evenly across {} seconds.", n_requests, full_duration);
+    let final_time_acc = time_acc.lock().await;
+    println!("Sent {} requests, {:.2?} seconds average per request.", n_requests, final_time_acc.as_secs_f64() / n_requests as f64);
 }
 
-async fn send_search_request(server_addr: &str, search_term: &str) -> tokio::io::Result<()> {
+async fn send_search_request(server_addr: &str, search_term: &str, n_request: u32) -> tokio::io::Result<Duration> {
     let mut stream = TcpStream::connect(server_addr)?;
+    let mut time = Instant::now();
     send_command(&mut stream, SEARCH_CMD)?;
     send_message(&mut stream, search_term)?;
-    wait_for_ack(&mut stream)
+    wait_for_ack(&mut stream)?;
+
+    loop {
+        match recv_message(&mut stream) {
+            Ok(message) => {
+                if !message.starts_with("done:") && !message.starts_with("update:") && !message.starts_with("found:") && !message.starts_with("found_in:") && message != ""{
+                    println!("{n_request} received strange message{}", message);
+                } else if (message.starts_with("done:")) {
+                    return Ok(time.elapsed());
+                }
+            }
+            Err(e) => {
+                return Err(tokio::io::Error::new(tokio::io::ErrorKind::Other, e));
+            }
+        }
+    }
 }
 #[tokio::main]
 async fn main() {

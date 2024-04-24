@@ -106,7 +106,7 @@ async fn search_files(mut stream: &mut TcpStream) -> io::Result<()> {
     }
 
     let elapsed_time = start_time.elapsed();
-    send_message(&mut stream, &format!("done: {:.2?}", elapsed_time))
+    send_message(&mut stream, &format!("done: {:?}", elapsed_time))
         .await
         .unwrap_or_else(|e| {
             println!("Error sending message: {}", e);
@@ -243,11 +243,6 @@ async fn search_in_file(
             last_update = Instant::now();
         }
         let content = String::from_utf8_lossy(&buffer[..bytes_read]);
-        println!(
-            "Searching in file: {}, for {}",
-            file_path.display(),
-            search_term
-        );
         for (index, _) in content
             .to_lowercase()
             .match_indices(search_term.to_lowercase().as_str())
@@ -262,8 +257,11 @@ async fn search_in_file(
             }
             // Get snippet of the line
             let start_index = index;
-            let end_index = std::cmp::min(content.len(), start_index + search_term.len() + 20);
-            let snippet = &content[start_index..end_index];
+            let end_index = std::cmp::min(content.len(), start_index + search_term.len() + 10);
+            let snippet = &content[start_index..end_index]
+                .chars()
+                .filter(|&c| c != '\n' && c != '\r')
+                .collect::<String>();
             send_message(
                 stream,
                 &format!(
@@ -296,8 +294,12 @@ async fn close_connection(stream: &mut TcpStream) {
 }
 
 async fn send_message(stream: &mut TcpStream, message: &str) -> io::Result<()> {
-    stream.write_all(message.as_bytes()).await?; // Write message
-    stream.write_all(&[DELIMITER]).await?; // Write delimiter
+    let message_len = message.len();
+    let message_len_bytes = message_len.to_be_bytes();
+    stream.write_all(&message_len_bytes).await?;
+    stream.flush().await?;
+    stream.write_all(message.as_bytes()).await?;
+    stream.flush().await?;
     Ok(())
 }
 
@@ -316,16 +318,13 @@ async fn recv_command(stream: &mut TcpStream) -> io::Result<u8> {
 }
 
 async fn recv_message(stream: &mut TcpStream) -> io::Result<String> {
-    let mut reader = BufReader::new(stream);
-    let mut message = String::new();
-    reader.read_line(&mut message).await?;
-    if let Some('\n') = message.chars().last() {
-        message.pop(); // Remove newline character at the end
-    }
-    if let Some('\r') = message.chars().last() {
-        message.pop(); // Remove carriage return if present (for Windows compatibility)
-    }
-    Ok(message)
+    let mut length_bytes = [0u8; 8];
+    stream.read_exact(&mut length_bytes).await?;
+    let length = u64::from_be_bytes(length_bytes) as usize;
+
+    let mut buffer = vec![0; length];
+    stream.read_exact(&mut buffer).await?;
+    Ok(String::from_utf8(buffer).unwrap())
 }
 
 async fn recv_file(stream: &mut TcpStream, name: &str) -> io::Result<u64> {
@@ -362,7 +361,7 @@ async fn recv_file(stream: &mut TcpStream, name: &str) -> io::Result<u64> {
 async fn main() -> io::Result<()> {
     init(); // Initialize any necessary components
 
-    let listener = TcpListener::bind("127.0.0.1:5000").await?;
+    let listener = TcpListener::bind("192.168.0.5:5000").await?;
     println!("Server listening on port 5000");
 
     loop {
