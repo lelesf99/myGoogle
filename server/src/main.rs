@@ -225,23 +225,23 @@ async fn search_in_file(
     buffer.copy_within(term_len..term_len + bytes_read, 0);
     bytes_read += term_len;
 
-    let update_interval = Duration::from_millis(200);
-    let mut last_update = Instant::now();
+    // let update_interval = Duration::from_millis(200);
+    // let mut last_update = Instant::now();
 
     while bytes_read != term_len {
-        if (last_update.elapsed() > update_interval) {
-            send_message(
-                stream,
-                &format!(
-                    "update: {}%", // Progress percentage
-                    (already_processed_bytes + processed_bytes + global_position) as f64
-                        / total_bytes as f64
-                        * 100.0
-                ),
-            )
-            .await?;
-            last_update = Instant::now();
-        }
+        // if (last_update.elapsed() > update_interval) {
+        //     send_message(
+        //         stream,
+        //         &format!(
+        //             "update: {}%", // Progress percentage
+        //             (already_processed_bytes + processed_bytes + global_position) as f64
+        //                 / total_bytes as f64
+        //                 * 100.0
+        //         ),
+        //     )
+        //     .await?;
+        //     last_update = Instant::now();
+        // }
         let content = String::from_utf8_lossy(&buffer[..bytes_read]);
         for (index, _) in content
             .to_lowercase()
@@ -357,7 +357,7 @@ async fn recv_file(stream: &mut TcpStream, name: &str) -> io::Result<u64> {
     Ok(received)
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 6)]
+#[tokio::main(worker_threads = 1024)]
 async fn main() -> io::Result<()> {
     init(); // Initialize any necessary components
 

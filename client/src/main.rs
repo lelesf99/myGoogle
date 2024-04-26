@@ -450,7 +450,7 @@ async fn send_search_request(server_addr: &str, search_term: &str, n_request: u3
         }
     }
 }
-#[tokio::main]
+#[tokio::main(worker_threads = 24000)]
 async fn main() {
     loop {
         print!("Enter command: ");
