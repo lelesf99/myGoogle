@@ -1,25 +1,17 @@
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
-use regex::bytes;
-use tokio::sync::Mutex;
-use tokio::time::sleep;
-use core::time;
-use std::io::{self, stdout, BufRead, BufReader, Read, Write};
+use std::fs::File;
+use std::io::{self, stdout, Read, Write};
 use std::net::TcpStream;
-use std::ops::Add;
 use std::sync::Arc;
-use std::thread;
 use std::time::{Duration, Instant};
-use std::{fs::File, string};
-
+use tokio::sync::Mutex;
 
 // constants
 
-const SERVER_ADDR: &str = "192.168.0.5:5000";
+const SERVER_ADDR: &str = "127.0.0.1:5000";
 const BUFFER_SIZE: usize = 16 * 1024;
-const DELIMITER: u8 = 0x0A;
 const ACK: &[u8] = b"OK";
-const NAK: &[u8] = b"NO";
 // server command map
 const UPLOAD_CMD: u8 = 1;
 const SEARCH_CMD: u8 = 2;
@@ -29,6 +21,8 @@ const LIST_CMD: u8 = 4;
 #[derive(Debug)]
 struct FileState {
     name: String,
+    size: u64,
+    bytes_read: u64,
     occurrences: Vec<String>,
 }
 
@@ -47,8 +41,11 @@ impl SearchState {
         }
     }
 
-    fn update_progress(&mut self, progress: String) {
-        self.progress = progress;
+    fn update_progress(&mut self) {
+        let total_size = self.files.iter().map(|file| file.size).sum::<u64>();
+        let total_bytes_read = self.files.iter().map(|file| file.bytes_read).sum::<u64>();
+        let progress = (total_bytes_read as f64 / total_size as f64) * 100.0;
+        self.progress = format!("{:.5}", progress);
     }
 
     fn add_occurrence(&mut self, file_name: &str, occurrence: &str, snippet: &str) {
@@ -115,17 +112,16 @@ async fn handle_command(args: Vec<String>) -> Result<(), String> {
     match args[0].as_str() {
         "help" => {
             println!("Available commands:");
-            println!("pwd - print current directory");
-            println!("cd <dir> - change directory");
-            println!("ls - list files in current directory");
-            println!("clear - clear screen");
-            println!("quit - quit program");
-            println!("ping - ping server");
-            println!("send <file> - send file to server");
-            println!("recv <file> - receive file from server");
-            println!("delete <file> - delete file from server");
-            println!("list - list files on server");
-            println!("test <n_requests> <full_duration> <search_term> - test server with multiple requests");
+            println!("  pwd - print current directory");
+            println!("  cd <dir> - change directory");
+            println!("  ls - list files in current directory");
+            println!("  clear - clear the screen");
+            println!("  quit - quit the program");
+            println!("  upload <file> - upload file to server");
+            println!("  search <term> - search for term in files");
+            println!("  delete <file> - delete file from server");
+            println!("  list - list files on server");
+            println!("  test <n_requests> <full_duration> <search_term> - test the server");
             Ok(())
         }
         // navigation commands
@@ -143,7 +139,8 @@ async fn handle_command(args: Vec<String>) -> Result<(), String> {
             if !path.exists() {
                 return Err(format!("Directory does not exist: {}", args[1]));
             }
-            std::env::set_current_dir(&args[1]);
+            std::env::set_current_dir(&args[1])
+                .unwrap_or_else(|e| println!("Failed to change directory: {}", e));
             Ok(())
         }
         "ls" => {
@@ -201,20 +198,24 @@ async fn handle_command(args: Vec<String>) -> Result<(), String> {
                 return Err(format!("Failed to receive ACK1: {}", e));
             }
             // Enables raw mode to control the cursor better
-            let mut stdout = stdout();
             let start_time = Instant::now();
             let mut search_state = SearchState::new();
 
             loop {
                 match recv_message(&mut stream) {
                     Ok(message) => {
-                        if message.starts_with("found_in:") {
-                            let file_name = message.replace("found_in: ", ""); // Save as a new String
-                            let mut file_state = FileState {
-                                name: file_name,
+                        if message.starts_with("searching: ") {
+                            let mut params = message.replace("searching: ", "");
+                            let mut parts = params.split(", ");
+                            let file_name = parts.next().unwrap();
+                            let file_size = parts.next().unwrap().parse::<u64>().unwrap();
+                            let file = FileState {
+                                name: file_name.to_string(),
+                                size: file_size,
+                                bytes_read: 0,
                                 occurrences: Vec::new(),
                             };
-                            search_state.files.push(file_state);
+                            search_state.files.push(file);
                         } else if message.starts_with("found:") {
                             // "found: {}, {}" format
                             let mut params = message.replace("found: ", "");
@@ -226,9 +227,31 @@ async fn handle_command(args: Vec<String>) -> Result<(), String> {
                             search_state.add_occurrence(file_name, byte, snippet);
                             search_state.sort_occ();
                         } else if message.starts_with("update:") {
-                            let update_message = message.replace("update: ", ""); // Save as a new String
-                            let progress = update_message.trim();
-                            search_state.update_progress(progress.to_string());
+                            // if not already created create file state
+                            let params = message.replace("update: ", "");
+                            let mut parts = params.split(", ");
+                            let file_name = parts.next().unwrap();
+                            let bytes_read = parts.next().unwrap().parse::<u64>().unwrap();
+                            let mut file = search_state
+                                .files
+                                .iter_mut()
+                                .find(|file| file.name == file_name);
+                            match file {
+                                Some(file) => {
+                                    file.bytes_read = bytes_read;
+                                }
+                                None => {
+                                    let file = FileState {
+                                        name: file_name.to_string(),
+                                        size: 0,
+                                        bytes_read,
+                                        occurrences: Vec::new(),
+                                    };
+                                    search_state.files.push(file);
+                                }
+                            }
+
+                            search_state.update_progress();
                             search_state.display_short();
                         } else if message.starts_with("done:") {
                             let elapsed_time = start_time.elapsed();
@@ -308,8 +331,12 @@ async fn handle_command(args: Vec<String>) -> Result<(), String> {
 }
 
 fn send_message(stream: &mut TcpStream, message: &str) -> io::Result<()> {
-    stream.write_all(message.as_bytes())?; // Write message
-    stream.write_all(&[DELIMITER])?; // Write delimiter
+    let message_len = message.len();
+    let message_len_bytes = message_len.to_be_bytes();
+    stream.write_all(&message_len_bytes)?;
+    stream.flush()?;
+    stream.write_all(message.as_bytes())?;
+    stream.flush()?;
     Ok(())
 }
 
@@ -323,16 +350,12 @@ fn send_command(stream: &mut TcpStream, command: u8) -> io::Result<()> {
 }
 
 fn recv_message(stream: &mut TcpStream) -> io::Result<String> {
-    let mut reader = BufReader::new(stream);
-    let mut message = String::new();
-    reader.read_line(&mut message)?;
-    if let Some('\n') = message.chars().last() {
-        message.pop(); // Remove newline character at the end
-    }
-    if let Some('\r') = message.chars().last() {
-        message.pop(); // Remove carriage return if present (for Windows compatibility)
-    }
-    Ok(message)
+    let mut length_bytes = [0u8; 8];
+    stream.read_exact(&mut length_bytes)?;
+    let length = u64::from_be_bytes(length_bytes) as usize;
+    let mut buffer = vec![0; length];
+    stream.read_exact(&mut buffer)?;
+    Ok(String::from_utf8(buffer).unwrap())
 }
 
 fn send_file(stream: &mut TcpStream, file: String) -> io::Result<()> {
@@ -371,7 +394,7 @@ fn wait_for_ack(stream: &mut TcpStream) -> io::Result<()> {
     let mut ack = [0u8; 2];
     match stream.read_exact(&mut ack) {
         Ok(_) => {
-            if ack == [79, 75] {
+            if ack == ACK {
                 return Ok(());
             } else {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid ack"));
@@ -382,7 +405,6 @@ fn wait_for_ack(stream: &mut TcpStream) -> io::Result<()> {
         }
     }
 }
-
 
 async fn test(n_requests: usize, full_duration: u64, search_term: String) {
     let server_addr = Arc::new(SERVER_ADDR.to_string());
@@ -408,7 +430,7 @@ async fn test(n_requests: usize, full_duration: u64, search_term: String) {
                     println!("Request {} completed in {:.2?}", index, time);
                     let mut time_acc_lock = time_acc.lock().await;
                     *time_acc_lock = *time_acc_lock + time;
-                },
+                }
                 Err(e) => {
                     eprintln!("Failed to send request: {:?}", e);
                 }
@@ -425,10 +447,18 @@ async fn test(n_requests: usize, full_duration: u64, search_term: String) {
     }
 
     let final_time_acc = time_acc.lock().await;
-    println!("Sent {} requests, {:.2?} seconds average per request.", n_requests, final_time_acc.as_secs_f64() / n_requests as f64);
+    println!(
+        "Sent {} requests, {:.2?} seconds average per request.",
+        n_requests,
+        final_time_acc.as_secs_f64() / n_requests as f64
+    );
 }
 
-async fn send_search_request(server_addr: &str, search_term: &str, n_request: u32) -> tokio::io::Result<Duration> {
+async fn send_search_request(
+    server_addr: &str,
+    search_term: &str,
+    n_request: u32,
+) -> tokio::io::Result<Duration> {
     let mut stream = TcpStream::connect(server_addr)?;
     let mut time = Instant::now();
     send_command(&mut stream, SEARCH_CMD)?;
@@ -438,7 +468,12 @@ async fn send_search_request(server_addr: &str, search_term: &str, n_request: u3
     loop {
         match recv_message(&mut stream) {
             Ok(message) => {
-                if !message.starts_with("done:") && !message.starts_with("update:") && !message.starts_with("found:") && !message.starts_with("found_in:") && message != ""{
+                if !message.starts_with("done:")
+                    && !message.starts_with("update:")
+                    && !message.starts_with("found:")
+                    && !message.starts_with("searching:")
+                    && message != ""
+                {
                     println!("{n_request} received strange message{}", message);
                 } else if (message.starts_with("done:")) {
                     return Ok(time.elapsed());
@@ -450,7 +485,7 @@ async fn send_search_request(server_addr: &str, search_term: &str, n_request: u3
         }
     }
 }
-#[tokio::main(worker_threads = 24000)]
+#[tokio::main(worker_threads = 1024)]
 async fn main() {
     loop {
         print!("Enter command: ");
@@ -459,23 +494,37 @@ async fn main() {
         let mut input = String::new();
         io::stdin().read_line(&mut input).unwrap();
 
-        // split quoted strings
+        // split by spaces
         let mut args: Vec<String> = input
             .trim()
             .split_whitespace()
             .map(|s| s.to_string())
             .collect();
 
-        if (args[0].as_str() == "search") {
-            args[1] = args[1..].join(" ");
-            // discard the rest
-            args.truncate(2);
+        // handle quote args, if starts with quote, join until end quote
+        let mut i = 0;
+        while i < args.len() {
+            if args[i].starts_with("\"") {
+                let mut j = i;
+                while !args[j].ends_with("\"") {
+                    j += 1;
+                }
+                let mut arg = args[i].clone();
+                for k in i + 1..=j {
+                    arg = arg + " " + &args[k];
+                }
+                arg = arg.replace("\"", "");
+                args[i] = arg;
+                for _ in i + 1..=j {
+                    args.remove(i + 1);
+                }
+            }
+            i += 1;
         }
 
         if args.is_empty() {
             continue;
         }
-
         match handle_command(args).await {
             Ok(_) => (),
             Err(e) => println!("Error: {}", e),
