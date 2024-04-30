@@ -56,5 +56,3 @@ Sobre os slides da apresentação não fiz porque nem o projeto eu finalizei ent
 
 Aprendi que não posso confiar no PO e tenho que caçar pra achar os requisitos corretos. E que não é legal quando o projeto muda por inteiro 4 dias para a entrega.
 
-Resolvi alguns problemas de leitura das mensagens, estava usando um reader que era ineficiente e não garantia a leitura imediata do buffer do TCP, isso tava causando diversos problemas. Agora só falta testar em uma maquina melhor, já que os notebooks que tenho aqui em casa ambos são meio limitados e tanto o cliente qunato o servidor depende da quantidade de threads disponíveis para manter as conexões. Ambos utilizam uma pool de workers e enfileiram as requisições, então mesmo que o teste seja configurado para tantas conexões por segundo, o cliente consegue mandar e manter algumas, a mesma coisa para o servidor, mas tecnicamente, a fila de requisições só depende da memória do servidor, então achei o suficiente. 
-
